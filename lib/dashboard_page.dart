@@ -20,6 +20,7 @@ class DashboardPage extends StatefulWidget {
 
 class _DashboardPageState extends State<DashboardPage> {
   final _repository = TransactionRepository();
+  int _selectedIndex = 0;
   bool _balanceVisible = true;
   bool _syncing = false;
   bool _loading = true;
@@ -115,7 +116,12 @@ class _DashboardPageState extends State<DashboardPage> {
             return Row(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                if (desktop) _DesktopRail(onLogout: () => unawaited(_logout())),
+                if (desktop)
+                  _DesktopRail(
+                    selectedIndex: _selectedIndex,
+                    onSelect: (index) => setState(() => _selectedIndex = index),
+                    onLogout: () => unawaited(_logout()),
+                  ),
                 Expanded(
                   child: CustomScrollView(
                     slivers: [
@@ -127,48 +133,7 @@ class _DashboardPageState extends State<DashboardPage> {
                           40,
                         ),
                         sliver: SliverList.list(
-                          children: [
-                            _DashboardHeader(
-                              syncing: _syncing,
-                              onSync: _syncInbox,
-                              onLogout: () => unawaited(_logout()),
-                              greetingName:
-                                  Supabase
-                                      .instance
-                                      .client
-                                      .auth
-                                      .currentUser
-                                      ?.userMetadata?['display_name']
-                                      ?.toString()
-                                      .split(' ')
-                                      .first ??
-                                  'there',
-                              gmailEmail: GmailService.instance.account?.email,
-                            ),
-                            const SizedBox(height: 28),
-                            if (_loading && _snapshot == null)
-                              const _DashboardLoading()
-                            else if (_loadError != null && _snapshot == null)
-                              _DashboardError(
-                                message: _loadError!,
-                                onRetry: _loadDashboard,
-                              )
-                            else ...[
-                              _DashboardGrid(
-                                desktop: desktop,
-                                balanceVisible: _balanceVisible,
-                                snapshot: _snapshot!,
-                                onToggleBalance: () => setState(
-                                  () => _balanceVisible = !_balanceVisible,
-                                ),
-                              ),
-                              const SizedBox(height: 24),
-                              _ActivityLayout(
-                                desktop: desktop,
-                                snapshot: _snapshot!,
-                              ),
-                            ],
-                          ],
+                          children: _buildContent(desktop),
                         ),
                       ),
                     ],
@@ -181,30 +146,618 @@ class _DashboardPageState extends State<DashboardPage> {
       ),
       bottomNavigationBar: MediaQuery.sizeOf(context).width < 980
           ? NavigationBar(
-              selectedIndex: 0,
-              destinations: [
+              selectedIndex: _selectedIndex,
+              onDestinationSelected: (index) =>
+                  setState(() => _selectedIndex = index),
+              destinations: const [
                 NavigationDestination(
                   icon: Icon(Icons.grid_view_rounded),
                   label: 'Overview',
                 ),
                 NavigationDestination(
                   icon: Icon(Icons.receipt_long_outlined),
-                  label: 'Activity',
+                  label: 'Transactions',
                 ),
                 NavigationDestination(
-                  icon: Icon(Icons.settings_outlined),
-                  label: 'Settings',
+                  icon: Icon(Icons.pie_chart_outline_rounded),
+                  label: 'Insights',
+                ),
+                NavigationDestination(
+                  icon: Icon(Icons.account_balance_outlined),
+                  label: 'Accounts',
                 ),
               ],
             )
           : null,
     );
   }
+
+  List<Widget> _buildContent(bool desktop) {
+    final header = _DashboardHeader(
+      syncing: _syncing,
+      onSync: _syncInbox,
+      onLogout: () => unawaited(_logout()),
+      greetingName:
+          Supabase
+              .instance
+              .client
+              .auth
+              .currentUser
+              ?.userMetadata?['display_name']
+              ?.toString()
+              .split(' ')
+              .first ??
+          'there',
+      gmailEmail: GmailService.instance.account?.email,
+    );
+
+    if (_loading && _snapshot == null) {
+      return [header, const SizedBox(height: 28), const _DashboardLoading()];
+    }
+    if (_loadError != null && _snapshot == null) {
+      return [
+        header,
+        const SizedBox(height: 28),
+        _DashboardError(message: _loadError!, onRetry: _loadDashboard),
+      ];
+    }
+
+    final snapshot = _snapshot!;
+    return switch (_selectedIndex) {
+      1 => [
+        _PageHeading(
+          title: 'Transactions',
+          subtitle: 'Search and review every imported bank transaction.',
+          action: _syncing ? null : _syncInbox,
+        ),
+        const SizedBox(height: 24),
+        _TransactionsPage(transactions: snapshot.transactions),
+      ],
+      2 => [
+        const _PageHeading(
+          title: 'Insights',
+          subtitle: 'See where your money went this month.',
+        ),
+        const SizedBox(height: 24),
+        _InsightsPage(snapshot: snapshot),
+      ],
+      3 => [
+        const _PageHeading(
+          title: 'Accounts',
+          subtitle: 'Your connected sources and current balances.',
+        ),
+        const SizedBox(height: 24),
+        _AccountsPage(snapshot: snapshot, onSync: _syncing ? null : _syncInbox),
+      ],
+      _ => [
+        header,
+        const SizedBox(height: 28),
+        _DashboardGrid(
+          desktop: desktop,
+          balanceVisible: _balanceVisible,
+          snapshot: snapshot,
+          onToggleBalance: () =>
+              setState(() => _balanceVisible = !_balanceVisible),
+        ),
+        const SizedBox(height: 24),
+        _ActivityLayout(desktop: desktop, snapshot: snapshot),
+      ],
+    };
+  }
+}
+
+class _PageHeading extends StatelessWidget {
+  const _PageHeading({
+    required this.title,
+    required this.subtitle,
+    this.action,
+  });
+
+  final String title;
+  final String subtitle;
+  final VoidCallback? action;
+
+  @override
+  Widget build(BuildContext context) {
+    return Row(
+      children: [
+        Expanded(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(title, style: Theme.of(context).textTheme.headlineMedium),
+              const SizedBox(height: 5),
+              Text(subtitle, style: Theme.of(context).textTheme.bodyMedium),
+            ],
+          ),
+        ),
+        if (action != null)
+          OutlinedButton.icon(
+            onPressed: action,
+            icon: const Icon(Icons.sync_rounded, size: 19),
+            label: const Text('Sync inbox'),
+          ),
+      ],
+    );
+  }
+}
+
+class _TransactionsPage extends StatefulWidget {
+  const _TransactionsPage({required this.transactions});
+
+  final List<BankTransaction> transactions;
+
+  @override
+  State<_TransactionsPage> createState() => _TransactionsPageState();
+}
+
+class _TransactionsPageState extends State<_TransactionsPage> {
+  String _query = '';
+  String _filter = 'All';
+
+  @override
+  Widget build(BuildContext context) {
+    final query = _query.trim().toLowerCase();
+    final filtered = widget.transactions.where((transaction) {
+      final matchesQuery =
+          query.isEmpty ||
+          transaction.title.toLowerCase().contains(query) ||
+          transaction.category.toLowerCase().contains(query) ||
+          (transaction.description?.toLowerCase().contains(query) ?? false);
+      final matchesFilter = switch (_filter) {
+        'Income' => transaction.isIncome,
+        'Expenses' => !transaction.isIncome,
+        _ => true,
+      };
+      return matchesQuery && matchesFilter;
+    }).toList();
+
+    return _CardShell(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Wrap(
+            spacing: 12,
+            runSpacing: 12,
+            crossAxisAlignment: WrapCrossAlignment.center,
+            children: [
+              SizedBox(
+                width: 360,
+                child: TextField(
+                  key: const Key('transactionSearchField'),
+                  onChanged: (value) => setState(() => _query = value),
+                  decoration: const InputDecoration(
+                    hintText: 'Search merchant or category',
+                    prefixIcon: Icon(Icons.search_rounded),
+                    isDense: true,
+                  ),
+                ),
+              ),
+              for (final filter in const ['All', 'Expenses', 'Income'])
+                ChoiceChip(
+                  label: Text(filter),
+                  selected: _filter == filter,
+                  onSelected: (_) => setState(() => _filter = filter),
+                ),
+            ],
+          ),
+          const SizedBox(height: 22),
+          Text(
+            '${filtered.length} ${filtered.length == 1 ? 'transaction' : 'transactions'}',
+            style: const TextStyle(
+              color: AppColors.muted,
+              fontSize: 12,
+              fontWeight: FontWeight.w600,
+            ),
+          ),
+          const SizedBox(height: 8),
+          if (filtered.isEmpty)
+            const Padding(
+              padding: EdgeInsets.symmetric(vertical: 42),
+              child: Column(
+                children: [
+                  Icon(
+                    Icons.search_off_rounded,
+                    color: AppColors.muted,
+                    size: 34,
+                  ),
+                  SizedBox(height: 10),
+                  Text(
+                    'No matching transactions.',
+                    style: TextStyle(color: AppColors.muted),
+                  ),
+                ],
+              ),
+            )
+          else
+            ...filtered.indexed.map(
+              (entry) => _TransactionRow(
+                transaction: entry.$2,
+                showDivider: entry.$1 != filtered.length - 1,
+              ),
+            ),
+        ],
+      ),
+    );
+  }
+}
+
+class _InsightsPage extends StatelessWidget {
+  const _InsightsPage({required this.snapshot});
+
+  final DashboardSnapshot snapshot;
+
+  @override
+  Widget build(BuildContext context) {
+    final now = DateTime.now();
+    final monthTransactions = snapshot.transactions.where((transaction) {
+      final date = transaction.date.toLocal();
+      return date.year == now.year && date.month == now.month;
+    });
+    final income = monthTransactions
+        .where((transaction) => transaction.isIncome)
+        .fold<double>(0, (sum, transaction) => sum + transaction.amount);
+    final sortedCategories = snapshot.categorySpending.entries.toList()
+      ..sort((a, b) => b.value.compareTo(a.value));
+    final topCategory = sortedCategories.isEmpty
+        ? null
+        : sortedCategories.first;
+    final net = income - snapshot.monthSpent;
+
+    return Column(
+      children: [
+        LayoutBuilder(
+          builder: (context, constraints) {
+            final wide = constraints.maxWidth >= 720;
+            final cards = [
+              _InsightMetric(
+                label: 'MONTHLY SPENDING',
+                value: formatMoney(
+                  snapshot.monthSpent,
+                  currency: snapshot.balanceCurrency,
+                ),
+                icon: Icons.arrow_outward_rounded,
+                color: AppColors.coral,
+              ),
+              _InsightMetric(
+                label: 'MONTHLY INCOME',
+                value: formatMoney(income, currency: snapshot.balanceCurrency),
+                icon: Icons.south_west_rounded,
+                color: AppColors.primary,
+              ),
+              _InsightMetric(
+                label: 'NET CASH FLOW',
+                value: formatMoney(
+                  net,
+                  currency: snapshot.balanceCurrency,
+                  sign: net >= 0 ? '+' : '-',
+                ),
+                icon: net >= 0
+                    ? Icons.trending_up_rounded
+                    : Icons.trending_down_rounded,
+                color: net >= 0 ? AppColors.primary : AppColors.coral,
+              ),
+            ];
+            if (!wide) {
+              return Column(
+                children: cards
+                    .map(
+                      (card) => Padding(
+                        padding: const EdgeInsets.only(bottom: 12),
+                        child: card,
+                      ),
+                    )
+                    .toList(),
+              );
+            }
+            return Row(
+              children:
+                  cards
+                      .expand(
+                        (card) => [
+                          Expanded(child: card),
+                          const SizedBox(width: 14),
+                        ],
+                      )
+                      .toList()
+                    ..removeLast(),
+            );
+          },
+        ),
+        const SizedBox(height: 18),
+        _CardShell(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                'Spending by category',
+                style: Theme.of(context).textTheme.titleLarge,
+              ),
+              const SizedBox(height: 6),
+              Text(
+                topCategory == null
+                    ? 'Sync transactions to build your breakdown.'
+                    : '${topCategory.key} is your largest category this month.',
+                style: Theme.of(context).textTheme.bodyMedium,
+              ),
+              const SizedBox(height: 24),
+              if (sortedCategories.isEmpty)
+                const Padding(
+                  padding: EdgeInsets.symmetric(vertical: 24),
+                  child: Center(
+                    child: Text(
+                      'No spending data yet.',
+                      style: TextStyle(color: AppColors.muted),
+                    ),
+                  ),
+                )
+              else
+                ...sortedCategories.map(
+                  (item) => _SpendingBar(
+                    label: item.key,
+                    amount: formatMoney(
+                      item.value,
+                      currency: snapshot.balanceCurrency,
+                    ),
+                    value: snapshot.monthSpent == 0
+                        ? 0
+                        : (item.value / snapshot.monthSpent).clamp(0, 1),
+                    color: item == topCategory
+                        ? AppColors.primary
+                        : const Color(0xFF9DB9AE),
+                  ),
+                ),
+            ],
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+class _InsightMetric extends StatelessWidget {
+  const _InsightMetric({
+    required this.label,
+    required this.value,
+    required this.icon,
+    required this.color,
+  });
+
+  final String label;
+  final String value;
+  final IconData icon;
+  final Color color;
+
+  @override
+  Widget build(BuildContext context) {
+    return _CardShell(
+      child: Row(
+        children: [
+          Container(
+            padding: const EdgeInsets.all(11),
+            decoration: BoxDecoration(
+              color: color.withValues(alpha: .12),
+              borderRadius: BorderRadius.circular(13),
+            ),
+            child: Icon(icon, color: color),
+          ),
+          const SizedBox(width: 14),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  label,
+                  style: const TextStyle(
+                    color: AppColors.muted,
+                    fontSize: 10,
+                    fontWeight: FontWeight.w700,
+                    letterSpacing: .7,
+                  ),
+                ),
+                const SizedBox(height: 6),
+                Text(
+                  value,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(
+                    color: AppColors.ink,
+                    fontSize: 19,
+                    fontWeight: FontWeight.w800,
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _AccountsPage extends StatelessWidget {
+  const _AccountsPage({required this.snapshot, required this.onSync});
+
+  final DashboardSnapshot snapshot;
+  final VoidCallback? onSync;
+
+  @override
+  Widget build(BuildContext context) {
+    final gmailEmail = GmailService.instance.account?.email;
+    final userEmail = Supabase.instance.client.auth.currentUser?.email;
+    return Column(
+      children: [
+        _CardShell(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                children: [
+                  const CircleAvatar(
+                    radius: 25,
+                    backgroundColor: AppColors.mint,
+                    child: Icon(
+                      Icons.account_balance_rounded,
+                      color: AppColors.primary,
+                    ),
+                  ),
+                  const SizedBox(width: 14),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        const Text(
+                          'Gmail imports',
+                          style: TextStyle(
+                            color: AppColors.ink,
+                            fontSize: 17,
+                            fontWeight: FontWeight.w800,
+                          ),
+                        ),
+                        const SizedBox(height: 3),
+                        Text(
+                          gmailEmail ?? 'Not connected',
+                          style: const TextStyle(color: AppColors.muted),
+                        ),
+                      ],
+                    ),
+                  ),
+                  _StatusPill(connected: gmailEmail != null),
+                ],
+              ),
+              const Divider(height: 38),
+              _AccountInfoRow(
+                label: 'Current balance',
+                value: snapshot.currentBalance == null
+                    ? 'Not available'
+                    : formatMoney(
+                        snapshot.currentBalance!,
+                        currency: snapshot.balanceCurrency,
+                      ),
+              ),
+              _AccountInfoRow(
+                label: 'Transactions imported',
+                value: '${snapshot.transactions.length}',
+              ),
+              _AccountInfoRow(
+                label: 'Last synced',
+                value: snapshot.lastSyncedAt == null
+                    ? 'Never'
+                    : _formatDateTime(snapshot.lastSyncedAt!),
+              ),
+              const SizedBox(height: 12),
+              Align(
+                alignment: Alignment.centerLeft,
+                child: FilledButton.icon(
+                  onPressed: onSync,
+                  icon: const Icon(Icons.sync_rounded),
+                  label: Text(
+                    gmailEmail == null ? 'Connect Gmail' : 'Sync now',
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ),
+        const SizedBox(height: 18),
+        _CardShell(
+          child: Row(
+            children: [
+              const Icon(
+                Icons.person_outline_rounded,
+                color: AppColors.primary,
+              ),
+              const SizedBox(width: 14),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    const Text(
+                      'Mailance profile',
+                      style: TextStyle(
+                        color: AppColors.ink,
+                        fontWeight: FontWeight.w700,
+                      ),
+                    ),
+                    const SizedBox(height: 4),
+                    Text(
+                      userEmail ?? 'Signed in',
+                      style: const TextStyle(color: AppColors.muted),
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+class _StatusPill extends StatelessWidget {
+  const _StatusPill({required this.connected});
+  final bool connected;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+      decoration: BoxDecoration(
+        color: connected ? AppColors.mint : AppColors.line,
+        borderRadius: BorderRadius.circular(20),
+      ),
+      child: Text(
+        connected ? 'Connected' : 'Offline',
+        style: TextStyle(
+          color: connected ? AppColors.primaryDark : AppColors.muted,
+          fontSize: 11,
+          fontWeight: FontWeight.w700,
+        ),
+      ),
+    );
+  }
+}
+
+class _AccountInfoRow extends StatelessWidget {
+  const _AccountInfoRow({required this.label, required this.value});
+  final String label;
+  final String value;
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 14),
+      child: Row(
+        children: [
+          Expanded(
+            child: Text(label, style: const TextStyle(color: AppColors.muted)),
+          ),
+          const SizedBox(width: 16),
+          Flexible(
+            child: Text(
+              value,
+              textAlign: TextAlign.right,
+              style: const TextStyle(
+                color: AppColors.ink,
+                fontWeight: FontWeight.w700,
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
 }
 
 class _DesktopRail extends StatelessWidget {
-  const _DesktopRail({required this.onLogout});
+  const _DesktopRail({
+    required this.selectedIndex,
+    required this.onSelect,
+    required this.onLogout,
+  });
 
+  final int selectedIndex;
+  final ValueChanged<int> onSelect;
   final VoidCallback onLogout;
 
   @override
@@ -242,25 +795,31 @@ class _DesktopRail extends StatelessWidget {
             ),
           ),
           const SizedBox(height: 44),
-          const _RailItem(
+          _RailItem(
             icon: Icons.grid_view_rounded,
             label: 'Overview',
-            selected: true,
+            selected: selectedIndex == 0,
+            onTap: () => onSelect(0),
           ),
-          const _RailItem(
+          _RailItem(
             icon: Icons.receipt_long_outlined,
             label: 'Transactions',
+            selected: selectedIndex == 1,
+            onTap: () => onSelect(1),
           ),
-          const _RailItem(
+          _RailItem(
             icon: Icons.pie_chart_outline_rounded,
             label: 'Insights',
+            selected: selectedIndex == 2,
+            onTap: () => onSelect(2),
           ),
-          const _RailItem(
+          _RailItem(
             icon: Icons.account_balance_outlined,
             label: 'Accounts',
+            selected: selectedIndex == 3,
+            onTap: () => onSelect(3),
           ),
           const Spacer(),
-          const _RailItem(icon: Icons.settings_outlined, label: 'Settings'),
           _RailItem(
             icon: Icons.logout_rounded,
             label: 'Sign out',
@@ -1147,63 +1706,135 @@ void _showTransactionDetails(
   BuildContext context,
   BankTransaction transaction,
 ) {
-  showModalBottomSheet<void>(
-    context: context,
-    isScrollControlled: true,
-    showDragHandle: true,
-    builder: (context) => SafeArea(
-      child: SingleChildScrollView(
-        padding: const EdgeInsets.fromLTRB(24, 4, 24, 28),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            Text(
-              'Transaction details',
-              style: Theme.of(context).textTheme.headlineSmall,
-            ),
-            const SizedBox(height: 22),
-            Text(
-              transaction.formattedAmount,
-              style: TextStyle(
-                color: transaction.isIncome ? AppColors.primary : AppColors.ink,
-                fontSize: 34,
-                fontWeight: FontWeight.w800,
-              ),
-            ),
-            const SizedBox(height: 20),
-            _DetailRow(label: 'Merchant / subject', value: transaction.title),
-            _DetailRow(label: 'Category', value: transaction.category),
-            _DetailRow(
-              label: 'Date and time',
-              value: _formatDateTime(transaction.date),
-            ),
-            _DetailRow(label: 'Currency', value: transaction.currency),
-            _DetailRow(
-              label: 'Source',
-              value: transaction.source.toUpperCase(),
-            ),
-            if (transaction.description?.isNotEmpty ?? false)
-              _DetailRow(label: 'Description', value: transaction.description!),
-            if (transaction.emailSender?.isNotEmpty ?? false)
-              _DetailRow(
-                label: 'Email sender',
-                value: transaction.emailSender!,
-              ),
-            if (transaction.emailSnippet?.isNotEmpty ?? false)
-              _DetailRow(
-                label: 'Email preview',
-                value: transaction.emailSnippet!,
-              ),
-            _DetailRow(
-              label: 'Import reference',
-              value: transaction.gmailMessageId,
-              monospace: true,
-            ),
-          ],
-        ),
-      ),
+  Navigator.of(context).push(
+    MaterialPageRoute<void>(
+      builder: (_) => _TransactionDetailPage(transaction: transaction),
     ),
   );
+}
+
+class _TransactionDetailPage extends StatelessWidget {
+  const _TransactionDetailPage({required this.transaction});
+
+  final BankTransaction transaction;
+
+  @override
+  Widget build(BuildContext context) {
+    final visual = _TransactionVisual.forCategory(transaction.category);
+    return Scaffold(
+      appBar: AppBar(
+        title: const Text('Transaction details'),
+        backgroundColor: AppColors.canvas,
+        surfaceTintColor: Colors.transparent,
+      ),
+      body: SafeArea(
+        child: Center(
+          child: SingleChildScrollView(
+            padding: const EdgeInsets.fromLTRB(20, 16, 20, 40),
+            child: ConstrainedBox(
+              constraints: const BoxConstraints(maxWidth: 680),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  _CardShell(
+                    color: AppColors.navy,
+                    child: Column(
+                      children: [
+                        Container(
+                          width: 56,
+                          height: 56,
+                          decoration: BoxDecoration(
+                            color: visual.background,
+                            borderRadius: BorderRadius.circular(17),
+                          ),
+                          child: Icon(visual.icon, color: visual.foreground),
+                        ),
+                        const SizedBox(height: 18),
+                        Text(
+                          transaction.formattedAmount,
+                          style: const TextStyle(
+                            color: Colors.white,
+                            fontSize: 36,
+                            fontWeight: FontWeight.w800,
+                          ),
+                        ),
+                        const SizedBox(height: 7),
+                        Text(
+                          transaction.title,
+                          textAlign: TextAlign.center,
+                          style: TextStyle(
+                            color: Colors.white.withValues(alpha: .72),
+                            fontSize: 15,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                  const SizedBox(height: 18),
+                  _CardShell(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.stretch,
+                      children: [
+                        _DetailRow(
+                          label: 'Merchant / subject',
+                          value: transaction.title,
+                        ),
+                        _DetailRow(
+                          label: 'Category',
+                          value: transaction.category,
+                        ),
+                        _DetailRow(
+                          label: 'Date and time',
+                          value: _formatDateTime(transaction.date),
+                        ),
+                        _DetailRow(
+                          label: 'Currency',
+                          value: transaction.currency,
+                        ),
+                        _DetailRow(
+                          label: 'Type',
+                          value: transaction.isIncome ? 'Income' : 'Expense',
+                        ),
+                        _DetailRow(
+                          label: 'Source',
+                          value: transaction.source.toUpperCase(),
+                        ),
+                        if (transaction.description?.isNotEmpty ?? false)
+                          _DetailRow(
+                            label: 'Description',
+                            value: transaction.description!,
+                          ),
+                        if (transaction.emailSubject?.isNotEmpty ?? false)
+                          _DetailRow(
+                            label: 'Email subject',
+                            value: transaction.emailSubject!,
+                          ),
+                        if (transaction.emailSender?.isNotEmpty ?? false)
+                          _DetailRow(
+                            label: 'Email sender',
+                            value: transaction.emailSender!,
+                          ),
+                        if (transaction.emailSnippet?.isNotEmpty ?? false)
+                          _DetailRow(
+                            label: 'Email preview',
+                            value: transaction.emailSnippet!,
+                          ),
+                        _DetailRow(
+                          label: 'Import reference',
+                          value: transaction.gmailMessageId,
+                          monospace: true,
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
 }
 
 class _DetailRow extends StatelessWidget {
